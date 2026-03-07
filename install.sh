@@ -3,7 +3,7 @@ set -e
 
 if [ -z "$1" ]; then
   echo "Usage: $0 /path/to/bun"
-  echo "Example: $0 \$(which bun)"
+  echo "Example: sudo $0 \$(which bun)"
   exit 1
 fi
 
@@ -15,9 +15,7 @@ if [ ! -x "$BUN_PATH" ]; then
   exit 1
 fi
 
-SERVICE_FILE="/etc/systemd/system/saki.service"
-
-sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+cat > /etc/systemd/system/saki.service <<EOF
 [Unit]
 Description=Saki CalDAV Server
 After=network.target
@@ -34,10 +32,10 @@ EnvironmentFile=$PROJECT_DIR/.env
 WantedBy=multi-user.target
 EOF
 
-sudo systemctl daemon-reload
-sudo systemctl enable saki
-sudo systemctl restart saki
+systemctl daemon-reload
+systemctl enable saki
+systemctl restart saki
 
 echo "Saki service installed and started."
-echo "  Status: sudo systemctl status saki"
-echo "  Logs:   sudo journalctl -u saki -f"
+echo "  Status: systemctl status saki"
+echo "  Logs:   journalctl -u saki -f"
