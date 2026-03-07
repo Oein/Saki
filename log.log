@@ -1,0 +1,5 @@
+
+> saki@1.0.0 dev
+> tsx watch src/index.ts
+
+10:15:49 AM [tsx] Previous process hasn't exited yet. Force killing...
