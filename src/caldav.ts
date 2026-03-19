@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import {
   getAllEvents,
   getEventByUid,
+  getStatusCalendars,
   createEvent,
   updateEvent,
   deleteEvent,
@@ -66,8 +67,18 @@ function calendarHomePath(username: string): string {
   return `/calendars/${username}/`;
 }
 
-function calendarPath(username: string): string {
-  return `/calendars/${username}/default/`;
+function calendarPath(username: string, calendarId: string = "default"): string {
+  return `/calendars/${username}/${encodeURIComponent(calendarId)}/`;
+}
+
+function extractCalendarIdFromPath(path: string, username: string): string | null {
+  const match = path.match(new RegExp(`^/calendars/${username}/([^/]+)(?:/.*)?$`));
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 function sendXml(res: Response, body: string): void {
@@ -140,26 +151,30 @@ export async function handlePropfind(req: Request, res: Response): Promise<void>
       ];
 
       if (depth !== "0") {
-        const calProps = buildCalendarCollectionProps(username);
-        responses.push(response(calendarPath(username), calProps));
+        const calendars = await getStatusCalendars();
+        for (const cal of calendars) {
+          const calProps = buildCalendarCollectionProps(username, cal.id, cal.name);
+          responses.push(response(calendarPath(username, cal.id), calProps));
+        }
       }
 
       sendXml(res, xml(responses));
       return;
     }
 
-    // Calendar collection
-    if (
-      path === calendarPath(username) ||
-      path === `/calendars/${username}/default`
-    ) {
-      const calProps = buildCalendarCollectionProps(username);
-      const responses = [response(calendarPath(username), calProps)];
+    // Calendar collection - match any /calendars/{user}/{calendarId}/
+    const calendarId = extractCalendarIdFromPath(path, username);
+    if (calendarId !== null && !path.endsWith(".ics")) {
+      const calendars = await getStatusCalendars();
+      const cal = calendars.find((c) => c.id === calendarId);
+      const displayName = cal?.name ?? calendarId;
+      const calProps = buildCalendarCollectionProps(username, calendarId, displayName);
+      const responses = [response(calendarPath(username, calendarId), calProps)];
 
       if (depth !== "0") {
-        const events = await getAllEvents();
+        const events = await getAllEvents(calendarId);
         for (const event of events) {
-          const eventHref = `${calendarPath(username)}${event.uid}.ics`;
+          const eventHref = `${calendarPath(username, calendarId)}${event.uid}.ics`;
           responses.push(
             response(eventHref, [
               `<d:resourcetype/>`,
@@ -203,6 +218,7 @@ export async function handlePropfind(req: Request, res: Response): Promise<void>
 export async function handleReport(req: Request, res: Response): Promise<void> {
   const username = (req as any).username || "user";
   const body = req.body?.toString() || "";
+  const calendarId = extractCalendarIdFromPath(req.path, username);
 
   try {
     const isMultiget = body.includes("calendar-multiget");
@@ -222,13 +238,15 @@ export async function handleReport(req: Request, res: Response): Promise<void> {
       const allEvents = await getAllEvents();
       events = allEvents.filter((e) => uids.includes(e.uid));
     } else {
-      // calendar-query: return all events (simplified - no time-range filter)
-      events = await getAllEvents();
+      // calendar-query: return events for this calendar only
+      events = calendarId !== null
+        ? await getAllEvents(calendarId)
+        : await getAllEvents();
     }
 
     const responses = events.map((event) => {
       const ics = eventToIcs(event);
-      const eventHref = `${calendarPath(username)}${event.uid}.ics`;
+      const eventHref = `${calendarPath(username, event.calendarId)}${event.uid}.ics`;
       return response(eventHref, [
         `<d:getetag>${escapeXml(event.etag)}</d:getetag>`,
         `<cal:calendar-data><![CDATA[${ics}]]></cal:calendar-data>`,
@@ -275,6 +293,9 @@ export async function handlePut(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  const username = (req as any).username || "user";
+  const calendarId = extractCalendarIdFromPath(req.path, username) ?? "default";
+
   const icsData = req.body?.toString() || "";
   const parsed = parseIcs(icsData);
   if (!parsed) {
@@ -304,6 +325,7 @@ export async function handlePut(req: Request, res: Response): Promise<void> {
         dtend: parsed.dtend,
         location: parsed.location,
         allDay: parsed.allDay,
+        calendarId,
       });
       res.status(201).set("ETag", created.etag).end();
     }
@@ -376,10 +398,10 @@ function buildPrincipalProps(
   };
 }
 
-function buildCalendarCollectionProps(username: string): string[] {
+function buildCalendarCollectionProps(username: string, _calendarId: string = "default", displayName: string = "Notion Calendar"): string[] {
   return [
     `<d:resourcetype><d:collection/><cal:calendar/></d:resourcetype>`,
-    `<d:displayname>Notion Calendar</d:displayname>`,
+    `<d:displayname>${escapeXml(displayName)}</d:displayname>`,
     `<cal:supported-calendar-component-set><cal:comp name="VEVENT"/></cal:supported-calendar-component-set>`,
     `<cal:supported-calendar-data><cal:calendar-data content-type="text/calendar" version="2.0"/></cal:supported-calendar-data>`,
     `<d:supported-report-set>
