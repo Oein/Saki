@@ -173,17 +173,17 @@ app.use((req, res, next) => {
   next();
 });
 
-// Event resource operations
-app.get("/calendars/:user/default/:uid.ics", handleGet);
-app.put("/calendars/:user/default/:uid.ics", handlePut);
-app.delete("/calendars/:user/default/:uid.ics", handleDelete);
+// Event resource operations (calendar = status-based calendar id)
+app.get("/calendars/:user/:calendar/:uid.ics", handleGet);
+app.put("/calendars/:user/:calendar/:uid.ics", handlePut);
+app.delete("/calendars/:user/:calendar/:uid.ics", handleDelete);
 
 // Start server
 async function main() {
   await ensureDatabaseProperties();
   app.listen(PORT, () => {
     console.log(`Saki CalDAV server running on http://localhost:${PORT}`);
-    console.log(`CalDAV URL: http://localhost:${PORT}/calendars/${CALDAV_USERNAME}/default/`);
+    console.log(`CalDAV base: http://localhost:${PORT}/calendars/${CALDAV_USERNAME}/`);
   });
 }
 

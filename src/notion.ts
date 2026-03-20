@@ -45,6 +45,15 @@ function pageToEvent(page: any): CalendarEvent | null {
   const lastModified = new Date(page.last_edited_time);
   const created = new Date(page.created_time);
 
+  // Extract 상태 (status) property → calendarId
+  const statusProp = props["상태"];
+  let calendarId = "default";
+  if (statusProp?.type === "select" && statusProp.select?.name) {
+    calendarId = statusProp.select.name;
+  } else if (statusProp?.type === "status" && statusProp.status?.name) {
+    calendarId = statusProp.status.name;
+  }
+
   return {
     uid,
     summary,
@@ -56,10 +65,46 @@ function pageToEvent(page: any): CalendarEvent | null {
     created,
     notionPageId: page.id,
     etag: `"${lastModified.getTime()}"`,
+    calendarId,
   };
 }
 
-export async function getAllEvents(): Promise<CalendarEvent[]> {
+// Cache for status calendars (5 min TTL)
+let _calendarCache: { id: string; name: string }[] | null = null;
+let _calendarCacheTime = 0;
+let _statusPropType: string | null = null;
+
+async function refreshCalendarCache(): Promise<void> {
+  const db = await notion.databases.retrieve({ database_id: databaseId });
+  const statusProp = (db as any).properties["상태"];
+
+  if (!statusProp) {
+    _calendarCache = [{ id: "default", name: "Notion Calendar" }];
+    _statusPropType = null;
+  } else {
+    _statusPropType = statusProp.type;
+    let options: any[] = [];
+    if (statusProp.type === "select") {
+      options = statusProp.select?.options || [];
+    } else if (statusProp.type === "status") {
+      options = statusProp.status?.options || [];
+    }
+    _calendarCache = [
+      { id: "default", name: "미분류" },
+      ...options.map((opt: any) => ({ id: opt.name, name: opt.name })),
+    ];
+  }
+  _calendarCacheTime = Date.now();
+}
+
+export async function getStatusCalendars(): Promise<{ id: string; name: string }[]> {
+  if (!_calendarCache || Date.now() - _calendarCacheTime > 300000) {
+    await refreshCalendarCache();
+  }
+  return _calendarCache!;
+}
+
+export async function getAllEvents(calendarId?: string): Promise<CalendarEvent[]> {
   const events: CalendarEvent[] = [];
   let cursor: string | undefined = undefined;
 
@@ -78,7 +123,8 @@ export async function getAllEvents(): Promise<CalendarEvent[]> {
     cursor = response.has_more ? response.next_cursor : undefined;
   } while (cursor);
 
-  return events;
+  if (calendarId === undefined) return events;
+  return events.filter((e) => e.calendarId === calendarId);
 }
 
 export async function getEventByUid(
@@ -137,28 +183,33 @@ export async function createEvent(event: {
   dtend: Date;
   location: string;
   allDay: boolean;
+  calendarId?: string;
 }): Promise<CalendarEvent> {
   const { start, end } = toNotionDate(event.dtstart, event.dtend, event.allDay);
 
+  // Ensure cache is populated to know the status prop type
+  if (!_calendarCache) await refreshCalendarCache();
+
+  const properties: any = {
+    "이름": { title: [{ text: { content: event.summary } }] },
+    "날짜": { date: { start, end } },
+    Description: { rich_text: [{ text: { content: event.description } }] },
+    Location: { rich_text: [{ text: { content: event.location } }] },
+    UID: { rich_text: [{ text: { content: event.uid } }] },
+  };
+
+  // Set 상태 property when calendarId is a named status (not default)
+  if (event.calendarId && event.calendarId !== "default" && _statusPropType) {
+    if (_statusPropType === "select") {
+      properties["상태"] = { select: { name: event.calendarId } };
+    } else if (_statusPropType === "status") {
+      properties["상태"] = { status: { name: event.calendarId } };
+    }
+  }
+
   const page = await notion.pages.create({
     parent: { database_id: databaseId },
-    properties: {
-      "이름": {
-        title: [{ text: { content: event.summary } }],
-      },
-      "날짜": {
-        date: { start, end },
-      },
-      Description: {
-        rich_text: [{ text: { content: event.description } }],
-      },
-      Location: {
-        rich_text: [{ text: { content: event.location } }],
-      },
-      UID: {
-        rich_text: [{ text: { content: event.uid } }],
-      },
-    },
+    properties,
   });
 
   return pageToEvent(page as any)!;

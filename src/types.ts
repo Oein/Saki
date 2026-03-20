@@ -9,6 +9,7 @@ export interface CalendarEvent {
   created: Date;
   notionPageId: string;
   etag: string;
+  calendarId: string; // 상태 property value, "default" if unset
 }
 
 export interface NotionEventProperties {
